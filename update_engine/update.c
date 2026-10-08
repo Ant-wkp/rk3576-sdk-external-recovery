@@ -311,7 +311,7 @@ void RK_ota_start(RK_upgrade_callback cb, RK_print_callback print_cb)
         cb(NULL, RK_UPGRADE_ERR);
         return ;
     }
-
+ 
     // 1. 获取文件
     int res = download_file(_url, _save_path);
     if (res == 0) {
