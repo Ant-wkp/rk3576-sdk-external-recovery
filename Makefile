@@ -52,6 +52,7 @@ UPDATE_ENGINE_OBJ = mtdutils/mounts.o \
 	update_engine/flash_image.o \
 	update_engine/log.o \
 	update_engine/main.o \
+	update_engine/boot_check.o \
 	update_engine/md5.o \
 	update_engine/md5sum.o \
 	update_engine/rkimage.o \

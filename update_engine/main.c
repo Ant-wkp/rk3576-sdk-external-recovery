@@ -26,6 +26,7 @@
 #include "../recovery_version.h"
 #include "defineHeader.h"
 #include "rktools.h"
+#include "boot_check.h"
 
 extern bool is_sdboot;
 extern bool is_usbboot;
@@ -40,7 +41,10 @@ void handle_upgrade_callback(void *user_data, RK_Upgrade_Status_t status)
 {
     if (status == RK_UPGRADE_FINISHED) {
         LOGI("rk ota success.\n");
-        setSlotActivity();
+        if (getCurrentSlot() >= 0 && setSlotActivity()) {
+            LOGE("A/B activation failed.\n");
+            status = RK_UPGRADE_ERR;
+        }
     }
     m_status = status;
     LOGI("rk m_status = %d.\n", m_status);
@@ -154,6 +158,7 @@ void display(void)
     LOGI("                write  Write /tmp/custom_cmdline to custom area");
     LOGI("                clean  clean custom area");
     LOGI("--update               Upgrade mode.\n");
+    LOGI("--boot-check           Boot-only health check, confirm/rollback and WDT handover. Use alone.\n");
     LOGI("--partition=0x3FFC00   Set the partition to be upgraded.(NOTICE: OTA not support upgrade loader and parameter)\n");
     LOGI("                       0x3FFC00: 0011 1111 1111 1100 0000 0000.\n");
     LOGI("                                 uboot trust boot recovery rootfs oem\n");
@@ -185,6 +190,7 @@ void display(void)
 }
 
 static const struct option engine_options[] = {
+    { "boot-check", no_argument, NULL, 256 },
     { "update", optional_argument, NULL, 'u' },
     { "version_url", required_argument, NULL, 'v' + 'u' },
     { "image_url", required_argument, NULL, 'i' + 'u'},
@@ -215,9 +221,15 @@ int main(int argc, char *argv[])
     bool is_update = false;
     bool is_reboot = false;
     int pipefd = -1;
+    int boot_check = 0;
+    bool other_options = false;
+    int operation_lock = -1;
 
     while ((arg = getopt_long(argc, argv, "", engine_options, NULL)) != -1) {
+        if (arg != 256)
+            other_options = true;
         switch (arg) {
+        case 256: boot_check++; continue;
         case 'u': is_update = true; if (optarg != NULL) is_sdboot = true; continue;
         case 'c': version_url = optarg; continue;
         case 'm': misc_func = optarg; continue;
@@ -235,6 +247,35 @@ int main(int argc, char *argv[])
         case '?':
             LOGE("Invalid command argument\n");
             continue;
+        }
+    }
+
+    if (boot_check) {
+        if (boot_check != 1 || other_options || optind != argc) {
+            LOGE("--boot-check must be used alone.\n");
+            return 2;
+        }
+        operation_lock = rk_ab_operation_lock();
+        if (operation_lock < 0) { LOGE("A/B operation busy or lock invalid.\n"); return 2; }
+        int result = rk_boot_check(operation_lock);
+        close(operation_lock);
+        return result;
+    }
+
+    bool mutating = is_update || (misc_func && strcmp(misc_func, "display")) ||
+                    (custom_define && strcmp(custom_define, "read"));
+    if (mutating) {
+        operation_lock = rk_ab_operation_lock();
+        if (operation_lock < 0) { LOGE("A/B operation busy or lock invalid.\n"); return 2; }
+        bool upgrading = is_update || (misc_func && !strcmp(misc_func, "update"));
+        int current = getCurrentSlot();
+        struct AvbABData metadata;
+        if (upgrading && current >= 0 &&
+            (rk_ab_read_verified(&metadata) || !metadata.slots[current].priority ||
+             !metadata.slots[current].successful_boot)) {
+            LOGE("Confirm or roll back the current A/B trial before another update.\n");
+            close(operation_lock);
+            return 2;
         }
     }
 
@@ -278,7 +319,7 @@ int main(int argc, char *argv[])
         }
     } else if (misc_func != NULL) {
         if (strcmp(misc_func, "now") == 0) {
-            if (setSlotSucceed() == 0) {
+            if ((isMtdDevice() || rk_boot_identity_slot() >= 0) && setSlotSucceed() == 0) {
                 m_status = RK_UPGRADE_FINISHED;
             }
         } else if (strcmp(misc_func, "other") == 0) {
@@ -323,5 +364,7 @@ int main(int argc, char *argv[])
             return -1;
     }
 
+    if (operation_lock >= 0)
+        close(operation_lock);
     return m_status;
 }

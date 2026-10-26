@@ -1,13 +1,15 @@
+#!/bin/sh
+# Finite boot-only checker, not a permanent watchdog feeder.
+BIN=/usr/bin/updateEngine
+PID=/run/updateEngine-boot-check.pid
 case "$1" in
-  start)
-        /usr/bin/updateEngine --misc=now 
+    start)
+        [ -x "$BIN" ] || exit 1
+        # The flock inside updateEngine is the final duplicate guard.
+        start-stop-daemon -S -b -m -p "$PID" -x "$BIN" -- --boot-check
         ;;
-  stop)
-        printf "stop finished\n"
+    stop)
+        # init terminates remaining processes. Never disable WDT on failure.
         ;;
-  *)
-        echo "Usage: $0 {start|stop}"
-        exit 1
-        ;;
+    *) echo "Usage: $0 {start|stop}" >&2; exit 2 ;;
 esac
-exit 0
