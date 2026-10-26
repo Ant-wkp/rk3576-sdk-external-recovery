@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix="rk-boot-check-") as tmp:
                    "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True, timeout=15)
     state = pathlib.Path(tmp) / "state"
-    subprocess.run(common + [str(ROOT / "tests/boot_check/state_test.c"),
+    subprocess.run(common + ["-DSUCCESSFUL_BOOT", str(ROOT / "tests/boot_check/state_test.c"),
                    "-Wl,--wrap=open,--wrap=fopen,--wrap=stat,--wrap=lstat,--wrap=fstat,--wrap=realpath",
                    "-Wl,--wrap=unlink,--wrap=mkostemp,--wrap=clock_gettime,--wrap=sleep,--wrap=uname",
                    "-Wl,--wrap=ioctl,--wrap=fork,--wrap=waitpid,--wrap=execl,--wrap=pause", "-o", str(state)], check=True)
@@ -49,3 +49,9 @@ with tempfile.TemporaryDirectory(prefix="rk-boot-check-") as tmp:
         if expected and not marker:
             assert not result.stdout, (args,result.stdout)
     print(f"native CLI tests passed ({len(cases)} cases)")
+    for definitions in [[], ["-DSUCCESSFUL_BOOT", "-DRETRY_BOOT"]]:
+        mode = pathlib.Path(tmp) / "mode"
+        subprocess.run(common + definitions + [str(ROOT / "tests/boot_check/mode_test.c"),
+                       "-Wl,--gc-sections,--wrap=open", "-o", str(mode)], check=True)
+        subprocess.run([str(mode)], check=True, timeout=5)
+    print("unsupported confirmation mode tests passed (no watchdog access)")

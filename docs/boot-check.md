@@ -40,6 +40,11 @@ the confirmed fallback and `last_boot`, durably verifies the sector, then
 immediately requests normal `/sbin/reboot`. It does not wait for seven failures,
 and does not call `setSlotActivity()`, which would clear fallback confirmation.
 An already-confirmed slot failure requests reboot without demotion.
+Root health is distinct from identity: a read-only root still permits immediate
+rollback if its actual block device and the misc device belong to the known
+slot/storage. An unknown root or a misc device on another disk never permits
+metadata mutation. `--boot-check` refuses non-SUCCESSFUL_BOOT builds before
+opening the watchdog; RETRY_BOOT confirmation is not compatible with this mode.
 
 Watchdog reset is only the fallback for a hung checker, failed reboot (15-second
 grace), unknown actual root, invalid metadata, absent confirmed fallback, or

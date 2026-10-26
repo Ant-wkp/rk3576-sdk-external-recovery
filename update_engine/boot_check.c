@@ -88,7 +88,7 @@ static int load_release(struct release *r)
 }
 
 /* Match mountinfo major:minor, never infer the root from /dev/root text. */
-static int mounted_device(const char *point, dev_t wanted, const char *fstype)
+static int mounted_device(const char *point, dev_t wanted, const char *fstype, int require_rw)
 {
     FILE *f = fopen("/proc/self/mountinfo", "re");
     if (!f) return -1;
@@ -104,7 +104,7 @@ static int mounted_device(const char *point, dev_t wanted, const char *fstype)
         char *save; int rw = 0;
         for (char *o = strtok_r(options, ",", &save); o; o = strtok_r(NULL, ",", &save))
             if (!strcmp(o, "rw")) rw = 1;
-        result = wanted == makedev(major, minor) && rw &&
+        result = wanted == makedev(major, minor) && (!require_rw || rw) &&
                  (!fstype || !strcmp(fstype, type)) ? 0 : -1;
         break;
     }
@@ -130,13 +130,23 @@ static int partition(const char *name, dev_t *dev, char parent[PATH_MAX])
     return !slash || sscanf(slash + 1, "mmcblk%u%c", &disk, &extra) != 1 ? -1 : 0;
 }
 
-int rk_boot_identity_slot(void)
+/* Rollback must still identify a known root that has remounted read-only.
+ * Do not confuse health (rw ext4) with trustworthy block-device identity. */
+static int root_slot(int require_healthy)
 {
-    int slot = getCurrentSlot(); char suffix[16], name[32], parent[PATH_MAX]; dev_t dev;
+    int slot = getCurrentSlot();
+    char suffix[16], name[32], parent[PATH_MAX], misc_parent[PATH_MAX]; dev_t dev, misc;
     if (slot < 0 || slot > 1 || chosen("uboot-ab-slot", suffix, sizeof(suffix)) ||
         strcmp(suffix, slot ? "_b" : "_a")) return -1;
     snprintf(name, sizeof(name), "system_%c", 'a' + slot);
-    return partition(name, &dev, parent) || mounted_device("/", dev, "ext4") ? -1 : slot;
+    return partition(name, &dev, parent) || partition("misc", &misc, misc_parent) ||
+           dev == misc || strcmp(parent, misc_parent) ||
+           mounted_device("/", dev, require_healthy ? "ext4" : NULL, require_healthy) ? -1 : slot;
+}
+
+int rk_boot_identity_slot(void)
+{
+    return root_slot(1);
 }
 
 static int identity(int slot, const struct release *r)
@@ -157,7 +167,7 @@ static int storage_ready(int slot)
     char name[32], root_parent[PATH_MAX], parent[PATH_MAX]; dev_t root, data, misc;
     snprintf(name, sizeof(name), "system_%c", 'a' + slot);
     if (partition(name, &root, root_parent) || partition("userdata", &data, parent) ||
-        strcmp(root_parent, parent) || data == root || mounted_device("/userdata", data, NULL) ||
+        strcmp(root_parent, parent) || data == root || mounted_device("/userdata", data, NULL, 1) ||
         partition("misc", &misc, parent) || strcmp(root_parent, parent) || misc == data || misc == root)
         return -1;
     char path[] = "/userdata/.updateEngine-check-XXXXXX";
@@ -245,6 +255,10 @@ static void reboot_now(int watchdog)
 
 int rk_boot_check(int operation_lock)
 {
+#if !defined(SUCCESSFUL_BOOT) || defined(RETRY_BOOT)
+    fprintf(stderr, "AB_CHECK requires SUCCESSFUL_BOOT without RETRY_BOOT\n");
+    return 2;
+#endif
     struct release r; struct AvbABData a;
     char boot[64], previous[512], expected[96]; int watchdog = -1, data_ready = 0;
     int slot = getCurrentSlot();
@@ -268,7 +282,7 @@ int rk_boot_check(int operation_lock)
     fprintf(stderr, "AB_CHECK started slot=%d watchdog_timeout=%d limit=%d stable=%d\n",
             slot, timeout, CHECK_LIMIT, STABLE_TIME); fflush(stderr);
     const char *reason = "check-timeout";
-    if (slot < 0 || isMtdDevice() || rk_ab_read_verified(&a) || load_release(&r)) {
+    if (slot < 0 || slot > 1 || isMtdDevice() || rk_ab_read_verified(&a) || load_release(&r)) {
         reason = "invalid-slot-metadata-or-release"; goto failed;
     }
     for (;;) {
@@ -307,7 +321,7 @@ int rk_boot_check(int operation_lock)
 failed:
     record_result(boot, reason, slot, data_ready);
     /* Never select a fallback from corrupt metadata or an unknown actual root. */
-    if (slot < 0 || slot > 1 || rk_boot_identity_slot() != slot || rk_ab_read_verified(&a)) await_reset();
+    if (slot < 0 || slot > 1 || root_slot(0) != slot || rk_ab_read_verified(&a)) await_reset();
     if (!a.slots[slot].successful_boot) {
         if (rk_ab_fail_current(slot)) {
             record_result(boot, "rollback-not-persisted-or-no-confirmed-fallback", slot, data_ready);

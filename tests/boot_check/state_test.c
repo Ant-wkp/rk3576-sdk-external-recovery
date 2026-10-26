@@ -8,6 +8,7 @@
 static char sandbox[PATH_MAX];
 static int slot, wfd, confirmations, rollbacks, reboots, feeds, stops;
 static int bad_identity, bad_metadata, no_fallback, confirmed, stop_error, confirm_error, feed_error;
+static int foreign_misc;
 static int64_t tick, reboot_tick;
 static jmp_buf reset_jump;
 static struct AvbABData metadata;
@@ -64,7 +65,10 @@ int __wrap_fstat(int fd, struct stat *st)
 char *__wrap_realpath(const char *path, char *out)
 {
     unsigned ma,mi; assert(sscanf(path,"/sys/dev/block/%u:%u",&ma,&mi)==2 && ma==179);
-    snprintf(out,PATH_MAX,"/sys/devices/mmc_host/mmc0/mmc0:0001/block/mmcblk0/mmcblk0p%u",mi);
+    if (foreign_misc && mi==4)
+        snprintf(out,PATH_MAX,"/sys/devices/mmc_host/mmc1/mmc1:0001/block/mmcblk1/mmcblk1p4");
+    else
+        snprintf(out,PATH_MAX,"/sys/devices/mmc_host/mmc0/mmc0:0001/block/mmcblk0/mmcblk0p%u",mi);
     return out;
 }
 int __wrap_unlink(const char *path)
@@ -120,6 +124,7 @@ static void setup(void)
     if(wfd>=0)close(wfd);
     slot=0;wfd=-1;confirmations=rollbacks=reboots=feeds=stops=0;tick=reboot_tick=0;
     bad_identity=bad_metadata=no_fallback=confirmed=stop_error=confirm_error=feed_error=0;
+    foreign_misc=0;
     memset(&metadata,0,sizeof(metadata));metadata.slots[0].priority=15;
     metadata.slots[1].priority=14;metadata.slots[1].successful_boot=1;
     put("/proc/sys/kernel/random/boot_id","11111111-2222-3333-4444-555555555555\n");
@@ -141,7 +146,7 @@ int main(int argc,char **argv)
     { struct release r; dev_t dev;char parent[PATH_MAX],v[32];
       assert(!chosen("uboot-ab-slot",v,sizeof(v)) && !strcmp(v,"_a"));
       assert(!partition("system_a",&dev,parent));
-      assert(!mounted_device("/",dev,"ext4"));
+      assert(!mounted_device("/",dev,"ext4",1));
       assert(rk_boot_identity_slot()==0);assert(!load_release(&r));assert(!identity(0,&r)); }
     assert(rk_boot_check(-1)==0);assert(confirmations==1&&stops==1&&!rollbacks&&!reboots&&tick==30);
     int oldfeeds=feeds;assert(rk_boot_check(-1)==0 && feeds==oldfeeds && stops==1);
@@ -167,6 +172,16 @@ int main(int argc,char **argv)
     setup();put("/proc/self/mountinfo","1 0 179:7 / / rw - ext4 /dev/root rw\n");
     if(!setjmp(reset_jump)) { rk_boot_check(-1);assert(0); }
     assert(rollbacks==1&&reboot_tick==120&&!stops&&!confirmations);
+    setup();put("/proc/self/mountinfo","1 0 179:7 / / ro - ext4 /dev/root ro\n2 1 179:9 / /userdata rw - ext4 /dev/mmcblk0p9 rw\n");
+    assert(rk_boot_identity_slot()==-1 && root_slot(0)==0);
+    if(!setjmp(reset_jump)) { rk_boot_check(-1);assert(0); }
+    assert(rollbacks==1&&reboots==1&&reboot_tick==0&&!confirmations&&!stops);
+    setup();put("/proc/self/mountinfo","1 0 179:8 / / rw - ext4 /dev/root rw\n2 1 179:9 / /userdata rw - ext4 /dev/mmcblk0p9 rw\n");
+    if(!setjmp(reset_jump)) { rk_boot_check(-1);assert(0); }
+    assert(!rollbacks&&!reboots&&!confirmations&&!stops);
+    setup();foreign_misc=1;
+    if(!setjmp(reset_jump)) { rk_boot_check(-1);assert(0); }
+    assert(!rollbacks&&!reboots&&!confirmations&&!stops);
     setup();slot=-1;
     if(!setjmp(reset_jump)) { rk_boot_check(-1);assert(0); }
     assert(!rollbacks&&!reboots&&!confirmations&&!stops);
