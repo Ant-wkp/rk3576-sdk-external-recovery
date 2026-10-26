@@ -149,31 +149,54 @@ bool isMtdDevice()
  *     1: b分区
  *    -1: recovery 模式
  */
-int getCurrentSlot()
+int rk_parse_slot(const char *cmdline)
 {
-    char cmdline[CMDLINE_LENGTH];
-    int fd = open("/proc/cmdline", O_RDONLY);
-    if (read(fd, (char*)cmdline, CMDLINE_LENGTH) < 1) {
-        close(fd);
+    static const char *keys[] = { "android_slotsufix=", "androidboot.slot_suffix=" };
+    int slot = -1;
+    const char *p = cmdline;
+    if (!p)
         return -1;
-    }
-    close(fd);
-    char *slot = strstr(cmdline, "android_slotsufix");
-    if (slot == NULL) slot = strstr(cmdline, "androidboot.slot_suffix");
-    if (slot != NULL) {
-        slot = strstr(slot, "=");
-        if (slot != NULL && *(++slot) == '_') {
-            slot += 1;
-            LOGI("Current Mode is '%c' system.\n", (*slot == 'a') ? 'A' : 'B');
-            if ((*slot) == 'a') {
-                return 0;
-            } else if ((*slot) == 'b') {
-                return 1;
+    while (*p) {
+        p += strspn(p, " \t\r\n");
+        size_t len = strcspn(p, " \t\r\n");
+        for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+            size_t keylen = strlen(keys[i]);
+            if (len >= keylen && !memcmp(p, keys[i], keylen)) {
+                if (len != keylen + 2 || p[keylen] != '_' ||
+                    (p[keylen + 1] != 'a' && p[keylen + 1] != 'b'))
+                    return -1;
+                int found = p[keylen + 1] - 'a';
+                if (slot != -1 && slot != found)
+                    return -1;
+                slot = found;
             }
         }
+        p += len;
     }
-    LOGI("Current Mode is recovery.\n");
-    return -1;
+    return slot;
+}
+
+int getCurrentSlot()
+{
+    char cmdline[CMDLINE_LENGTH + 1];
+    size_t used = 0;
+    int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    while (used < sizeof(cmdline) - 1) {
+        ssize_t n = read(fd, cmdline + used, sizeof(cmdline) - 1 - used);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0) { close(fd); return -1; }
+        if (!n)
+            break;
+        used += n;
+    }
+    if (!used || used == sizeof(cmdline) - 1) { close(fd); return -1; }
+    if (close(fd))
+        return -1;
+    cmdline[used] = '\0';
+    return rk_parse_slot(cmdline);
 }
 
 void getFlashPoint(char *path)

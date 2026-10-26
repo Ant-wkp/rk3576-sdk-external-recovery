@@ -214,22 +214,36 @@ static int readMisc_mtd(char *buf, int offset, int size)
 
 static int writeMisc_block(char *buf, int offset, int size)
 {
-    FILE* f = fopen(MISC_PARTITION_NAME_BLOCK, "wb");
-    if (f == NULL) {
-        LOGE("Can't open %s\n(%s)\n", MISC_PARTITION_NAME_BLOCK, strerror(errno));
-        return -1;
+    int fd = open(MISC_PARTITION_NAME_BLOCK, O_RDWR | O_CLOEXEC);
+    int result = -1;
+    unsigned char sector[512], verify[512];
+    const void *data = buf;
+    size_t bytes = size > 0 ? (size_t)size : 0;
+    if (fd < 0 || offset < 0 || !bytes)
+        goto out;
+    /* A/B metadata occupies only 32 bytes. Preserve the complete sector. */
+    if (offset == MISC_OFFSET && size == AVB_AB_DATA_SIZE) {
+        if (pread(fd, sector, sizeof(sector), offset) != sizeof(sector))
+            goto out;
+        memcpy(sector, buf, size);
+        data = sector;
+        bytes = sizeof(sector);
     }
-    fseek(f, offset, SEEK_SET);
-    int count = fwrite(buf, sizeof(char), size, f);
-    if (count != size) {
-        LOGE("Failed writing %s\n(%s)\n", MISC_PARTITION_NAME_BLOCK, strerror(errno));
-        return -1;
+    if (bytes > sizeof(verify)) {
+        /* Other misc users retain their existing range, with durable I/O. */
+        if (pwrite(fd, data, bytes, offset) != (ssize_t)bytes || fsync(fd))
+            goto out;
+        result = 0;
+        goto out;
     }
-    if (fclose(f) != 0) {
-        LOGE("Failed closing %s\n(%s)\n", MISC_PARTITION_NAME_BLOCK, strerror(errno));
-        return -1;
-    }
-    return 0;
+    if (pwrite(fd, data, bytes, offset) != (ssize_t)bytes || fsync(fd) ||
+        pread(fd, verify, bytes, offset) != (ssize_t)bytes || memcmp(data, verify, bytes))
+        goto out;
+    result = 0;
+out:
+    if (fd >= 0 && close(fd))
+        result = -1;
+    return result;
 }
 
 static int readMisc_block(char *buf, int offset, int size)
@@ -241,11 +255,15 @@ static int readMisc_block(char *buf, int offset, int size)
         return -1;
     }
 
-    fseek(f, offset, SEEK_SET);
+    if (fseek(f, offset, SEEK_SET)) {
+        fclose(f);
+        return -1;
+    }
 
     int count = fread(buf, sizeof(char), size, f);
     if (count != size) {
         LOGE("Failed reading %s\n(%s)\n", MISC_PARTITION_NAME_BLOCK, strerror(errno));
+        fclose(f);
         return -1;
     }
     if (fclose(f) != 0) {
@@ -298,12 +316,55 @@ static int readABMisc(struct AvbABData* info)
     return readMisc((char *)info, MISC_OFFSET, sizeof(struct AvbABData));
 }
 
+static int validateABMisc(const struct AvbABData *info)
+{
+    _Static_assert(sizeof(struct AvbABData) == AVB_AB_DATA_SIZE, "A/B disk ABI");
+    if (memcmp(info->magic, AVB_AB_MAGIC, AVB_AB_MAGIC_LEN) ||
+        info->version_major != AVB_AB_MAJOR_VERSION ||
+        info->version_minor != AVB_AB_MINOR_VERSION || info->last_boot > 1 ||
+        info->crc32 != avb_htobe32(avb_crc32((const unsigned char *)info, 28)))
+        return -1;
+    for (int i = 0; i < AB_SLOT_NUM; i++) {
+        const AvbABSlotData *s = &info->slots[i];
+        if (s->priority > AVB_AB_MAX_PRIORITY ||
+            s->tries_remaining > AVB_AB_MAX_TRIES_REMAINING || s->successful_boot > 1 ||
+            (s->successful_boot && s->tries_remaining))
+            return -1;
+    }
+    return 0;
+}
+
+int rk_ab_read_verified(struct AvbABData *info)
+{
+    return !info || readABMisc(info) || validateABMisc(info) ? -1 : 0;
+}
+
 /**
  * 往misc 偏移2k处写入引导信息
  */
 static int writeABMisc(struct AvbABData *info)
 {
-    return writeMisc((char *)info, MISC_OFFSET, sizeof(struct AvbABData));
+    struct AvbABData verify;
+    if (validateABMisc(info) || writeMisc((char *)info, MISC_OFFSET, sizeof(*info)) ||
+        rk_ab_read_verified(&verify) || memcmp(info, &verify, sizeof(verify)))
+        return -1;
+    return 0;
+}
+
+int rk_ab_fail_current(int expected_slot)
+{
+    struct AvbABData info;
+    if (expected_slot < 0 || expected_slot >= AB_SLOT_NUM ||
+        getCurrentSlot() != expected_slot || rk_ab_read_verified(&info) ||
+        info.slots[expected_slot].successful_boot ||
+        !info.slots[1 - expected_slot].priority ||
+        !info.slots[1 - expected_slot].successful_boot)
+        return -1;
+    info.slots[expected_slot].priority = 0;
+    info.slots[expected_slot].tries_remaining = 0;
+    info.slots[expected_slot].successful_boot = 0;
+    AvbABData_update_crc(&info);
+    return writeABMisc(&info);
 }
 
 /**
@@ -353,7 +414,7 @@ int setSlotSucceed()
         return -1;
     }
     struct AvbABData info;
-    if (readABMisc(&info) == -1) {
+    if (rk_ab_read_verified(&info)) {
         return -1;
     }
 
@@ -362,8 +423,14 @@ int setSlotSucceed()
     }
     if (avb_safe_memcmp(info.magic, AVB_AB_MAGIC, AVB_AB_MAGIC_LEN) != 0) {
         LOGE("Magic is incorrect.\n");
-        return false;
+        return -1;
     }
+    if (!info.slots[now_slot].priority)
+        return -1;
+#ifdef SUCCESSFUL_BOOT
+    if (info.slots[now_slot].successful_boot)
+        return 0;
+#endif
     if (info.slots[now_slot].priority != AVB_AB_MAX_PRIORITY) {
         /* Something could be wrong, correct it because this slot is bootable */
         LOGW("Warning: current slot priorty is %d != %d, Correct it!\n",
@@ -404,7 +471,8 @@ int setSlotActivity()
     }
     struct AvbABData info;
 
-    if (readABMisc(&info) == -1) {
+    if (rk_ab_read_verified(&info) || !info.slots[now_slot].priority ||
+        !info.slots[now_slot].successful_boot) {
         return -1;
     }
 

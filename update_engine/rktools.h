@@ -43,4 +43,5 @@ char* itoa(int num, char* str, int radix);
 
 bool isMtdDevice();
 int getCurrentSlot();
+int rk_parse_slot(const char *cmdline);
 #endif
