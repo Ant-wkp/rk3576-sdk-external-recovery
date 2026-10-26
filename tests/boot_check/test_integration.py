@@ -58,14 +58,14 @@ def test_release(tmp):
     for d in ["target/etc", "u-boot", "kernel/include/config", "kernel/arch/arm64/boot/dts/rockchip"]:
         (fake / d).mkdir(parents=True, exist_ok=True)
     (target / "etc/ab-test-version").write_text("v1\n")
-    (fake / "u-boot/u-boot.bin").write_bytes(b"\x00U-Boot 2017.09 test-abtest-v1\x00")
+    (fake / "u-boot/u-boot.bin").write_bytes(b"\x00U-Boot 2017.09\x00U-Boot 2017.09 (test)-abtest-v1\x00")
     (fake / "kernel/include/config/kernel.release").write_text("6.1.75-abtest-v1\n")
     dtb = fake / "kernel/arch/arm64/boot/dts/rockchip/rk3576-100ask-dshanpi-a1-ab-v1.dtb"
     subprocess.run(["dtc", "-I", "dts", "-O", "dtb", "-o", str(dtb)],
                    input='/dts-v1/; / { chosen { 100ask,ab-test-version = "v1"; }; };', text=True, check=True)
     subprocess.run(["sh", str(generator), str(target), "v1"], check=True)
     stamp = (target / "etc/rk-ota-release").read_text()
-    assert "release=v1\n" in stamp and "uboot=U-Boot 2017.09 test-abtest-v1\n" in stamp
+    assert "release=v1\n" in stamp and "uboot=U-Boot 2017.09 (test)-abtest-v1\n" in stamp
     (fake / "kernel/include/config/kernel.release").write_text("6.1.75-abtest-v2\n")
     result = subprocess.run(["sh", str(generator), str(target), "v1"], capture_output=True)
     assert result.returncode and (target / "etc/rk-ota-release").read_text() == stamp
