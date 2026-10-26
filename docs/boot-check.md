@@ -17,6 +17,10 @@ authenticity. They do not hash the mutable mounted ext4 against its release imag
 Do not install the old `S99ab-watchdog` or provision a separate feeder in userdata.
 The BSP watchdog must permit stopping (`NOWAYOUT=n`) and have a working reset.
 This integration targets the existing eMMC A/B layout, not MTD or network roots.
+After changing native sources, run `./build.sh bmake:recovery-rebuild` before
+the SDK/rootfs build. Buildroot caches local packages across board switches.
+The final gate rejects differing copied inputs or a binary older than its
+inputs; syncing source alone is not proof that it was rebuilt.
 
 ## Runtime policy
 

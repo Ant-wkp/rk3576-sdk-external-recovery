@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build-time identity and actual kernel stop-function checks; no hardware."""
 import pathlib
+import os
 import shutil
 import subprocess
 import tempfile
@@ -73,10 +74,25 @@ def test_release(tmp):
 
 
 def test_install_gate(tmp):
-    target = tmp / "install-target"
+    fake = tmp / "install-sdk"
+    target = fake / "buildroot/output/board/target"
     (target / "usr/bin").mkdir(parents=True)
     (target / "etc/init.d").mkdir(parents=True)
-    gate = SDK / "buildroot/package/rockchip/recovery/check-boot-install.sh"
+    gate = fake / "buildroot/package/rockchip/recovery/check-boot-install.sh"
+    gate.parent.mkdir(parents=True)
+    shutil.copyfile(SDK / "buildroot/package/rockchip/recovery/check-boot-install.sh", gate)
+    source = fake / "external/recovery"
+    build = target.parent / "build/recovery-develop"
+    inputs = ["Makefile", "bootloader.h", "update_engine/main.c", "update_engine/boot_check.c",
+              "update_engine/boot_check.h", "update_engine/rktools.c", "update_engine/rktools.h",
+              "update_engine/rkbootloader.c", "update_engine/S99_bootcontrol"]
+    for name in inputs:
+        for directory in [source, build]:
+            file = directory / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text("fixture input\n")
+            os.utime(file, (1000, 1000))
+    (build / "updateEngine").write_text("fixture executable\n")
     def run():
         return subprocess.run(["sh", str(gate), str(target)], capture_output=True).returncode
     assert run() != 0
@@ -87,6 +103,13 @@ def test_install_gate(tmp):
     assert run() != 0  # Missing release must fail even if vendor logging hid it.
     stamp = target / "etc/rk-ota-release"
     stamp.write_text("release=v1\nkernel=k\nuboot=u\ndtb=v1\nlayout=l\nspl_abi=a\n")
+    assert run() == 0
+    (source / "update_engine/boot_check.c").write_text("changed source\n")
+    assert run() != 0
+    shutil.copyfile(source / "update_engine/boot_check.c", build / "update_engine/boot_check.c")
+    os.utime(build / "updateEngine", (1000, 1000))
+    assert run() != 0  # Synced source is not evidence of recompilation.
+    os.utime(build / "updateEngine", None)
     assert run() == 0
     old = target / "etc/init.d/S99ab-watchdog"
     old.write_text("old feeder\n")
