@@ -72,8 +72,34 @@ def test_release(tmp):
     print("release generator tests passed (matching artifacts, stale/mixed rejection)")
 
 
+def test_install_gate(tmp):
+    target = tmp / "install-target"
+    (target / "usr/bin").mkdir(parents=True)
+    (target / "etc/init.d").mkdir(parents=True)
+    gate = SDK / "buildroot/package/rockchip/recovery/check-boot-install.sh"
+    def run():
+        return subprocess.run(["sh", str(gate), str(target)], capture_output=True).returncode
+    assert run() != 0
+    for name in ["usr/bin/updateEngine", "etc/init.d/S99_bootcontrol"]:
+        file = target / name
+        file.write_text("#!/bin/sh\n# --boot-check\n")
+        file.chmod(0o755)
+    assert run() != 0  # Missing release must fail even if vendor logging hid it.
+    stamp = target / "etc/rk-ota-release"
+    stamp.write_text("release=v1\nkernel=k\nuboot=u\ndtb=v1\nlayout=l\nspl_abi=a\n")
+    assert run() == 0
+    old = target / "etc/init.d/S99ab-watchdog"
+    old.write_text("old feeder\n")
+    assert run() != 0
+    old.unlink()
+    (target / "etc/init.d/S99_bootcontrol").write_text("# --boot-check\nupdateEngine --misc=now\n")
+    assert run() != 0
+    print("rootfs install gate tests passed (missing files, old feeder, unsafe confirmation)")
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="rk-boot-integration-") as name:
         tmp = pathlib.Path(name)
         test_kernel_stop(tmp)
         test_release(tmp)
+        test_install_gate(tmp)
