@@ -55,3 +55,7 @@ with tempfile.TemporaryDirectory(prefix="rk-boot-check-") as tmp:
                        "-Wl,--gc-sections,--wrap=open", "-o", str(mode)], check=True)
         subprocess.run([str(mode)], check=True, timeout=5)
     print("unsupported confirmation mode tests passed (no watchdog access)")
+    native = pathlib.Path(tmp) / "native-update"
+    subprocess.run(common + [str(ROOT / "tests/boot_check/native_update_test.c"),
+                   "-Wl,--gc-sections,--wrap=unlink", "-o", str(native)], check=True)
+    subprocess.run([str(native)], check=True, timeout=5)
