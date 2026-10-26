@@ -2,6 +2,7 @@
 """Build-time identity and actual kernel stop-function checks; no hardware."""
 import pathlib
 import os
+import importlib.util
 import shutil
 import subprocess
 import tempfile
@@ -120,9 +121,53 @@ def test_install_gate(tmp):
     print("rootfs install gate tests passed (missing files, old feeder, unsafe confirmation)")
 
 
+def test_fit_guard(tmp):
+    path = ROOT / "tests/boot_check/check_fit.py"
+    spec = importlib.util.spec_from_file_location("native_fit_guard", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    def image(name, signature=False, value="01 02", outside=False):
+        nodes = []
+        for part in ["atf-1", "atf-2", "atf-3", "optee"]:
+            data = f"data = [{value}];"
+            if outside and part == "atf-1":
+                data = "data-size=<16>; data-position=<0x300000>;"
+            nodes.append(f'{part} {{ {data} compression="none"; }};')
+        sign = 'value=[01];' if signature else ''
+        dts = '/dts-v1/; / { images { '+''.join(nodes)+' }; configurations { conf { signature { algo="sha256,rsa2048"; '+sign+' }; }; }; };'
+        dtb = tmp / (name+".dtb")
+        subprocess.run(["dtc", "-I", "dts", "-O", "dtb", "-o", str(dtb)], input=dts, text=True, check=True)
+        copy = dtb.read_bytes().ljust(2*1024*1024, b"\0")
+        result = tmp / (name+".img")
+        result.write_bytes(copy+copy)
+        return result
+    good = image("unsigned-placeholder")
+    assert module.inspect(good)["signature_value_present"] is False
+    for bad in [image("signed", signature=True), image("outside", outside=True)]:
+        try:
+            module.inspect(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unsafe FIT accepted")
+    changed = image("changed-trust", value="01 03")
+    result = subprocess.run(["python3", str(path), "--reference", str(good), "--image", str(changed)], capture_output=True)
+    assert result.returncode != 0
+    copy_bad = tmp / "copies-differ.img"
+    data = bytearray(good.read_bytes());data[-1] = 1;copy_bad.write_bytes(data)
+    try:
+        module.inspect(copy_bad)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("different copies accepted")
+    print("FIT guard tests passed (placeholder, signature value, extent, payload/copy mismatch)")
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="rk-boot-integration-") as name:
         tmp = pathlib.Path(name)
         test_kernel_stop(tmp)
         test_release(tmp)
         test_install_gate(tmp)
+        test_fit_guard(tmp)
