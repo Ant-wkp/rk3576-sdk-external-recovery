@@ -82,3 +82,11 @@ Physical acceptance must separately prove immediate fallback and watchdog
 stopping for longer than the actual hardware period. Host tests are not board
 acceptance. This feature does not certify native delta transactions, arbitrary
 power-loss safety, signatures, MTD, or old standalone OTA behavior.
+
+The 2026-10-27 DShanPi A1 board results are recorded in
+[boot-check-acceptance.md](boot-check-acceptance.md), with problems and inherited
+limits in [boot-check-issues.md](boot-check-issues.md). Test-only one-shot fixtures
+are documented under `tests/boot_check/board/`; they are not production inputs.
+For an OTA command, do not use the inherited `--reboot` SysRq branch: verify a
+successful update and then issue normal `reboot` separately. The new boot checker
+itself requests normal `/sbin/reboot` on its explicit failure path.
