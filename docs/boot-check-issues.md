@@ -91,3 +91,13 @@ SPL 会更新 `last_boot`。仅比较回退前与下一次 Linux 启动后的扇
 成功后另行正常 `reboot`；新增启动检查失败分支使用正常 `/sbin/reboot`。
 旧代码 `sprintf` 等告警仍在，不能因本轮成功就宣称恶意包安全、差分事务、
 断电原子性或签名认证已解决。CRC、fsync 和读回不是断电原子写保证。
+
+## 14. 原生日志中的源名称和写入意图不能当作实际目标
+
+官方包只有 `*_a` 源镜像，A→B 时日志仍可显示 `now write uboot_a to
+/dev/block/by-name/uboot_b`：源名称回退不改变已选定的 B 目标路径。最终
+证据审计按目标路径核对，不误要求日志一定变成 `uboot_b` 源名称。
+原 `RK_ota_start()` 还会先打印 parameter 的 `now write`，随后立即进入
+普通 OTA 跳过分支并打印 `ingore misc.`，并未调用 `flash_parameter()`。
+因此不能只搜索 `now write parameter` 就认定改了 GPT。真实源码隔离测试、
+跳过日志及共享前8MiB摘要保持共同支撑本轮不写GPT的结论；没有为美化日志改算法。

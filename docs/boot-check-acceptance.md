@@ -118,6 +118,9 @@ WDT 时钟为24MHz、TOP15，SPL 报告89479ms，Linux取整报告89秒。
   `integration-tests-resumed.log`、两套SHA256SUMS及package/fit-check JSON。
 - `issues.md`：问题与解决记录；`commits.md`：完整本地跨组件提交清单；
   `physical-journal.md`：过程记录，旧阶段报告保留，不覆盖历史验收结论。
+- `verify_evidence.py` / `evidence-verification.json`：对22份网口归档、真实
+  元数据快照、保留区、哨兵和复位时序的可重复只读断言审计，结果PASS。
+  源镜像名称与实际目标路径、parameter打印后跳过的区别见问题记录第14节。
 
 代码/测试交付节点：Recovery `c167716fa`，Buildroot `28aa50988`，
 device/rockchip `6efa46b4d`，BSP kernel `80aca98f9`。文档提交另列于清单。
